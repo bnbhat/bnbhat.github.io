@@ -1,4 +1,4 @@
-module github.com/chrede88/qubtTemplate
+module github.com/bnbhat/bnbhat.github.io.v4
 
 go 1.22.2
 
