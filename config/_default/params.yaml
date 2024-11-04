@@ -3,9 +3,9 @@
 ############################
 
 author:
-  name: bnbhat
+  name: Balachandra Bhat
   image: author.png
-  greeting: "Your new Qubt site :tada:"
+  greeting: "Welcome to my portfolio website :tada:"
   icon: ":wave:"
 
 ############################
@@ -13,12 +13,12 @@ author:
 ############################
 
 links:
-  - github: https://github.com/bnbhat/bnbhat.github.io.v4
-  - link: https://github.com/bnbhat/bnbhat.github.io.v4#readme
-  # - website: 
-  # - x-twitter: 
+  - github: https://github.com/bnbhat
+  - link: https://github.com/bnbhat/bnbhat.github.io#readme
+  - website: https://bnbhat.github.io
+  - x-twitter: https://x.com/balachandra311
   # - mastodon: 
-  # - linkedin: 
+  - linkedin: https://www.linkedin.com/in/balachandrabhat/
   # - instagram: 
   # - reddit: 
   # - telegram: 
@@ -26,8 +26,8 @@ links:
   # - signal: 
   # - codepen: 
   # - dev: 
-  # - email: 
-  # - discord: 
+  - email: bhalu311@gmail.com
+  #- discord: bnbhat
   # - orcid: 
   # - slack: 
   # - stack-overflow: 
@@ -52,7 +52,7 @@ links:
   # - strava: 
   # - untappd: 
   # - skype: 
-  # - medium: 
+  - medium: https://bnbhat.medium.com/
   # - foursquare: 
   # - apple: 
   # - amazon:
@@ -64,7 +64,7 @@ links:
 ## OpenGraph & Twitter Cards
 ###############################
 
-title: bnbhat.github.io.v4
-description: "Site build with Qubt & Hugo"
+title: Balachandra Bhat
+description: "my personal website"
 images:
   - thumbnail.png
