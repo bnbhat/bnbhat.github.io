@@ -1,4 +1,4 @@
-# bnbhat.github.io.v4
+# bnbhat.github.io
 
 Please follow the instructions below to finish the setup of your new Qubt site.
 
@@ -7,7 +7,7 @@ Please follow the instructions below to finish the setup of your new Qubt site.
 1) Add a LICENSE to your repo.
 2) Clone your version of the template to your local computer:
 ```shell
-git clone https://github.com/<username>/<reponame>
+git clone https://github.com/bnbhat/bnbhat.github.io.git
 ```
 3) Modify `config/_default/hugo.yaml`, `config/_default/params.yaml` and `config/_default/menus.yaml` according to the configuration below.
 4) Add your blog posts to `content/blog/`. See example posts for reference.

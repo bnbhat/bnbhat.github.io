@@ -1,4 +1,4 @@
-module github.com/bnbhat/bnbhat.github.io.v4
+module github.com/bnbhat/bnbhat.github.io
 
 go 1.22.2
 
