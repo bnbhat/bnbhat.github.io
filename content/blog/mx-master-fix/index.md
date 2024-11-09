@@ -1,6 +1,6 @@
 ---
 title: Fixing my Mx Master 3S mouse
-summary: DIY repair guide for fixing the left-click issue on my Logitech MX Master 3S.
+summary: DIY repair guide for fixing the button-click issue on Logitech MX Master 3S.
 date: 2024-08-19
 cardimage: mx-master-card.webp
 featureimage: mx-master.webp
