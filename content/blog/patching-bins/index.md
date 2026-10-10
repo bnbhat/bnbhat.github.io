@@ -11,51 +11,25 @@ authors:
 
 ## The mystery
 
-It started with a single, unhelpful line of output:
+A test tool failed with this error:
 
 ```
 ERROR 0xe: unable to get domain struct 6
 ```
 
-A test tool was failing against a brand-new hardware subsystem — one that,
-by every other signal on the system, was working perfectly fine. A daemon
-responsible for that exact subsystem was running, and its logs showed it
-successfully attaching and doing its job. Yet the moment the test harness
-tried to use that same subsystem, it fell over with a generic "bad
-parameter" error and gave up.
+The subsystem it was testing looked fine otherwise. Its daemon was running and its logs showed it attaching and working correctly. Only the test harness complained, with a generic "bad parameter" error.
 
-This is a familiar shape of bug for anyone who's worked on embedded systems,
-SDKs, or any codebase with a "test tools" folder nobody has touched in years:
-**the error message doesn't match the system's actual behavior.** Something,
-somewhere, disagrees with reality, and the only way out is to go find out
-exactly where.
-
-What follows isn't really about this one bug. It's a walkthrough of a
-technique that applies anywhere you hit a wall like this: *a prebuilt
-binary, no source in sight, and a failure that only it believes in.*
+This post isn't really about that one bug — it's about the process for tracking down a failure when you only have a prebuilt binary and no source for it.
 
 ## Step 1: Don't trust the first theory
 
-The tempting first explanation was the simplest one — "this hardware doesn't
-support that subsystem." It's a satisfying answer, because it requires no
-further work; you just stop using it and move on.
+The easy explanation was "this hardware doesn't support that subsystem." But the daemon logs contradicted that — it had started up and was working without issue moments earlier. If the hardware didn't support it, that daemon wouldn't be running cleanly.
 
-But satisfying isn't the same as correct. The system journal told a
-different story: a daemon for that exact subsystem had started up moments
-earlier and was working without complaint. If the hardware genuinely didn't
-support it, that daemon wouldn't exist, let alone run cleanly.
-
-**Lesson:** when a failure contradicts other evidence on the same system,
-trust the evidence, not the error message. The daemon logs were first-hand
-proof the capability existed; the test tool's complaint was just a
-complaint.
+When a failure contradicts other evidence on the same system, trust the evidence over the error message.
 
 ## Step 2: Watch syscalls before you read code
 
-Rather than open an editor, the next move was to watch what the failing
-process actually *did* at the kernel boundary, using `strace`. This is
-cheap, non-destructive, and tells you the truth about execution order
-instead of the intended order:
+Instead of opening an editor, I traced the failing process with `strace` to see what it actually did:
 
 ```
 openat(AT_FDCWD, "/dev/dma_heap/system", O_RDONLY|O_CLOEXEC) = 5
@@ -64,54 +38,36 @@ write(1, "Creating sequence of numbers fro"..., 43)
 write(1, "\nERROR 0xe: unable to get domain"..., 42)
 ```
 
-Critically, **there was no `open` or `ioctl` on any device file in
-between.** No attempt to talk to the hardware at all. That one observation
-collapsed the search space enormously: whatever was failing, it was failing
-*before* anything reached the driver or the hardware. It had to be pure
-userspace logic — a check, a lookup, a table — deciding to give up early.
+There's no `open` or `ioctl` on any device file between those lines. The failure happens before anything reaches the driver or hardware — so it has to be pure userspace logic: a check, a lookup, a table, deciding to give up early.
 
 ## Step 3: Grep the source before you suspect the source
 
-With "it's a userspace check" as the working theory, the natural next step
-was to search the library's own source for the exact error string:
+Working theory: a userspace check. Next step, search the library source for the exact error string:
 
 ```
 $ grep -r "unable to get domain struct" src/ inc/
 (no matches)
 ```
 
-That's a useful negative result, not a dead end. If the string isn't
-anywhere in the source you have, whatever's printing it isn't *your* code —
-it's something else linked into the same process. Here, the test harness
-turned out to be a thin loader: it `dlopen()`s a handful of prebuilt `.so`
-payload files and calls a known entry point in each. The actual logic — and
-the bug — lived entirely inside binaries nobody had the source for anymore.
-
-This happens more often than people expect: vendor test suites, legacy
-plugins, old demo binaries shipped with an SDK, third-party libraries
-bundled into a build. The investigation doesn't stop here; it just changes
-tools.
+A useful negative result. If the string isn't in the source you have, something else linked into the process is printing it. Here, the test harness turned out to be a thin loader: it `dlopen()`s a few prebuilt `.so` payload files and calls a known entry point in each. The actual logic — and the bug — lives inside binaries nobody has the source for anymore. This is common with vendor test suites, legacy plugins, and old SDK demo binaries.
 
 ## Step 4: Binaries still talk, if you ask nicely
 
-When source runs out, standard toolchain utilities can read a binary for
-you, for free:
+With no source, standard toolchain utilities can still read the binary:
 
 ```
 $ strings -a payload.so | grep -i "domain struct"
 ERROR 0x%x: unable to get domain struct %d
 ```
 
-Found it — inside the prebuilt payload, confirming it wasn't the real
-runtime library talking.
+Confirmed — the string lives inside the payload, not the real runtime library.
 
 ```
 $ file payload.so
 payload.so: ELF 64-bit LSB shared object, ARM aarch64, ... with debug_info, not stripped
 ```
 
-"Not stripped" is a huge win — function and variable *names* survived, not
-just addresses:
+"Not stripped" means function and variable names survived:
 
 ```
 $ nm -C payload.so | grep -i domain
@@ -119,16 +75,9 @@ $ nm -C payload.so | grep -i domain
 0000000000002e44 T is_valid_domain_id
 ```
 
-(`T` = a function in `.text`; uppercase means globally visible. `nm` uses a
-handful of these letters — `D`/`d` for data, `B`/`b` for bss, `U` for
-undefined/external, `W`/`w` for weak symbols — enough to turn a wall of
-addresses into a readable map.)
+(`T` = function in `.text`, uppercase = globally visible. Other common letters: `D`/`d` data, `B`/`b` bss, `U` undefined/external, `W`/`w` weak.)
 
-Disassembling the function named `get_domain` (`objdump -d -C`, using the
-architecture-appropriate cross tool when the host one can't decode the
-target ISA) showed a simple linear search over a **5-entry table**, 16 bytes
-per entry, returning `NULL` if nothing matched. Tracing the caller a little
-further showed exactly what happens on a miss:
+Disassembling `get_domain` (`objdump -d -C`, using the architecture-appropriate cross tool when the host one can't decode the target ISA) showed a linear search over a 5-entry table, 16 bytes per entry, returning `NULL` on no match. The caller handles a miss like this:
 
 ```asm
 bl   get_domain          ; x0 = get_domain(domain_id)
@@ -139,14 +88,11 @@ bl   printf               ; "unable to get domain struct %d"
 b    bail                 ; give up, no device ever touched
 ```
 
-That matched the error text, the error code, *and* the "no syscalls"
-observation from step 2 — exactly. Root cause located with certainty, not
-guesswork.
+This matches the error text, the error code, and the "no syscalls" observation from step 2. Root cause confirmed.
 
 ## Step 5: Find the table and dump it
 
-The table itself was loaded indirectly through a relocation. `readelf -r`
-named the actual symbol; `readelf -x` then dumped its raw bytes:
+The table is loaded indirectly through a relocation. `readelf -r` named the symbol; `readelf -x` dumped its bytes:
 
 ```
 0x6110: id=0  "&_dom=adsp"
@@ -156,80 +102,40 @@ named the actual symbol; `readelf -x` then dumped its raw bytes:
 0x6150: id=4  "&_dom=cdsp1"
 ```
 
-Five known IDs, baked into the binary at build time. The ID the test was
-being asked to use simply wasn't on the list — not a hardware limitation, not
-a driver bug, just a stale lookup table from before that subsystem existed.
+Five known IDs baked into the binary at build time. The ID the test used wasn't on the list — not a hardware limitation, just a stale lookup table from before this subsystem existed.
 
 ## Step 6: Patch it like a surgeon
 
-Once you know exactly which bytes are wrong and exactly why, you can choose
-to fix it directly in the compiled artifact. Binary patching has a bad
-reputation, usually from people doing it carelessly. Done carefully, it's
-precise and reversible, if you follow a few rules:
+Once you know exactly which bytes are wrong and why, you can patch the compiled artifact directly. Rules that keep it safe and reversible:
 
-1. **Never edit in place.** Work on a copy; keep the original backed up
-   somewhere the running system won't pick it up by accident.
-2. **Change bytes, not structure.** Overwriting existing bytes with new
-   values of the *same length* is safe. Growing or shrinking a data
-   structure shifts everything after it in the file and cascades into a full
-   relink you can't do by hand without the original build system.
-3. **Reuse, don't append.** An unused table slot — a legacy option, a value
-   the current hardware doesn't have — is much safer to repurpose than
-   trying to insert a new one. Just confirm first that nothing else in the
-   binary depends on that slot's old meaning (a quick `strings`/disassembly
-   search is cheap insurance).
-4. **Verify mechanically.** Dump the bytes before and after with the same
-   tool and diff them. You want to see *exactly* the bytes you intended to
-   change, and nothing else.
-5. **Know what you're trading away**, and write it down. Here, sacrificing
-   one legacy table entry meant that option could no longer be tested with
-   this particular binary — an acceptable trade on hardware that never had
-   it anyway, but a conscious one.
+1. **Never edit in place.** Work on a copy; keep the original backed up.
+2. **Change bytes, not structure.** Overwriting existing bytes with same-length values is safe. Growing or shrinking a structure shifts everything after it and effectively requires a full relink.
+3. **Reuse, don't append.** An unused table slot (a legacy option, a value the current hardware doesn't have) is safer to repurpose than inserting a new one. Confirm first that nothing else depends on that slot's old meaning — a quick `strings`/disassembly search is cheap insurance.
+4. **Verify mechanically.** Dump the bytes before and after with the same tool and diff them. You should see exactly the bytes you intended to change, nothing else.
+5. **Know what you're trading away, and write it down.** Here, sacrificing one legacy table entry meant that option could no longer be tested with this binary — acceptable since the hardware never had it, but worth recording.
 
-The actual patch was a five-line script: open a copy, seek to the known
-offset, overwrite the 16-byte record with the new ID and name, and confirm
-with the same `readelf -x` dump used to find the table in the first place.
-One byte changed the ID, twelve more replaced the name — the rest of the
-file, untouched.
+The patch itself: open a copy, seek to the known offset, overwrite the 16-byte record with the new ID and name, and confirm with the same `readelf -x` dump used to find the table. One byte changed the ID, twelve more replaced the name — the rest of the file untouched.
 
 ## Step 7: Write it down
 
-The most important, most skipped step: once you've found the problem and
-fixed it, document the investigation, not just the fix. A patched binary
-with no explanation is a landmine for the next person — quite possibly
-future-you — who updates the vendor package, wonders why a previously-fixed
-test is suddenly broken again, and has no idea a byte-level patch ever
-existed.
+Document the investigation, not just the fix. A patched binary with no explanation is a landmine for whoever updates the vendor package next and wonders why a previously-fixed test is suddenly broken again.
 
-A good writeup includes the symptom and how to reproduce it, the evidence
-that ruled out the wrong explanations, the tools and commands used in order
-(so the investigation is repeatable, not just the conclusion), the exact
-bytes changed at exact offsets in exact files, and the caveats: what you
-can't test anymore, and why this is a workaround rather than a real fix.
+A good writeup covers:
+- The symptom and how to reproduce it
+- The evidence that ruled out the wrong explanations
+- The tools and commands used, in order
+- The exact bytes changed, at exact offsets, in exact files
+- The caveats: what you can't test anymore, and why this is a workaround rather than a real fix
 
 ## The takeaway
 
-Strip away the specific error message and the specific subsystem, and what's
-left is a pattern that shows up constantly in systems work:
-
-> Something fails with a vague error. The system around it clearly supports
-> what's being asked. The source for the thing that's actually complaining
-> is nowhere to be found. The fix is in there somewhere, encoded in bytes
-> instead of text.
-
-The process that gets you from "vague error" to "exact byte, exact offset,
-exact reason" is always the same shape:
+The pattern: a vague error, a system that clearly supports what's being asked, and no source for the thing that's actually complaining. The fix is encoded in bytes instead of text.
 
 1. Trust the system's observable behavior over the error text.
-2. Watch syscalls before you read code — it tells you *where* to look.
+2. Watch syscalls before you read code — it tells you where to look.
 3. Grep the source you have, and take a negative result seriously.
-4. When source runs out, let `strings`, `nm`, `objdump`, and `readelf` read
-   the binary for you.
+4. When source runs out, let `strings`, `nm`, `objdump`, and `readelf` read the binary for you.
 5. Patch narrowly, on a copy, with a mechanical before/after verification.
 6. Document the investigation as carefully as the fix.
 
-The next cryptic error you hit probably won't involve a DSP subsystem. It
-might be a plugin, a vendored library, a decade-old shared object, a config
-parser that only half-understands a newer file format. The tools and the
-discipline are the same either way — the binary already knows the answer,
-you just have to ask it the right way.
+The next cryptic error probably won't involve a DSP subsystem — it might be a plugin, a vendored library, or a config parser that only half-understands a newer file format. The tools and discipline are the same either way.
