@@ -1,0 +1,23 @@
+{
+	"name": "Hugo (bnbhat.github.io)",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	"forwardPorts": [1313],
+	"portsAttributes": {
+		"1313": {
+			"label": "Hugo server",
+			"onAutoForward": "openPreview"
+		}
+	},
+	"postCreateCommand": "hugo mod tidy",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"budparr.language-hugo-vscode",
+				"golang.go"
+			]
+		}
+	},
+	"remoteUser": "vscode"
+}
